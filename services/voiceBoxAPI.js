@@ -1,27 +1,19 @@
 async function reproducirVoz(textoIngresado) {
-    const speaker = 18;
+    // Limpiamos la etiqueta de emoción para que no se lea en voz alta.
+    const textoLimpio = textoIngresado.slice(5);
 
-    const queryResponse = await fetch(`http://localhost:50021/audio_query?text=${encodeURIComponent(textoIngresado)}&speaker=${speaker}`, {
-        method: 'POST'
-    });
-
-    const audioQuery = await queryResponse.json();
-    audioQuery.speedScale = 1.5; 
-    
-    const synthesisResponse = await fetch(`http://localhost:50021/synthesis?speaker=${speaker}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(audioQuery)
-    });
-
-    const audioBlob = await synthesisResponse.blob();
+    // Llamamos a nuestro nuevo servidor Coqui TTS en el puerto 50022.
+    const response = await fetch(`http://localhost:50022/tts?text=${encodeURIComponent(textoLimpio)}`);
+    if (!response.ok) {
+        throw new Error(`Error en el servidor de voz: ${response.statusText}`);
+    }
+    const audioBlob = await response.blob();
     const audioURL = URL.createObjectURL(audioBlob);
     const audio = new Audio(audioURL);
 
     return new Promise((resolve) => {
-        audio.onplay = resolve; 
+        // Resolvemos la promesa cuando el audio termine de reproducirse.
+        audio.onended = resolve;
         audio.play();
     });
 }
