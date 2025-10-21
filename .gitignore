@@ -1,0 +1,4 @@
+# Ignorar la carpeta de VoiceVox, ya que es una dependencia local
+VOICEVOX/
+
+# Puedes añadir aquí otros archivos o carpetas que no quieras subir
