@@ -1,6 +1,12 @@
 import { MLCEngine } from "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.78/lib/index.min.js";
 import { reproducirVoz } from "./services/voiceBoxAPI.js";
 
+// --- INICIO: Nuevos elementos para RAG ---
+const { pipeline } = window.Transformers;
+const { Voy } = window;
+const pdfjsLib = window['pdfjs-dist/build/pdf'];
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//mozilla.github.io/pdf.js/build/pdf.worker.mjs`;
+// --- FIN: Nuevos elementos para RAG ---
 
     const chatBox = document.getElementById("chat");
     const input = document.getElementById("user-input");
@@ -8,6 +14,13 @@ import { reproducirVoz } from "./services/voiceBoxAPI.js";
     const micBtn = document.getElementById("mic-btn");
     const stopBtn = document.getElementById("stop-btn");
     const imagenCharacter = document.getElementById("imagen-character");
+    // --- INICIO: Nuevos elementos del DOM para RAG ---
+    const uploadBtn = document.getElementById("upload-btn");
+    const fileInput = document.getElementById("file-input");
+    // --- INICIO: Nuevos elementos para la interfaz de chat flotante ---
+    const openChatBtn = document.getElementById("open-chat-btn");
+    const chatContainer = document.getElementById("chat-container");
+    // --- FIN: Nuevos elementos del DOM para RAG ---
 
     const recognition = new webkitSpeechRecognition();
     recognition.continuous = true;
@@ -15,8 +28,14 @@ import { reproducirVoz } from "./services/voiceBoxAPI.js";
     recognition.interimResult = false;
 
     let recognizedText = "";
+    let isEngineReady = false; // <-- NUEVA LÍNEA: Variable para controlar el estado del motor de IA
     let engine;
     const model = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+
+    // --- INICIO: Variables globales para RAG ---
+    let embeddingPipeline = null;
+    let vectorStore = null;
+    // --- FIN: Variables globales para RAG ---
 
     const systemPrompt = {
       role: "system",
@@ -74,12 +93,24 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
 
     //funciones auxiliares
 
+    // --- INICIO: Nueva función para inicializar componentes RAG ---
+    const initializeRAG = async () => {
+      appendMsg("Bot", "Preparando mi 'mochila de estudio' (cargando modelo de embeddings)...");
+      embeddingPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+      vectorStore = new Voy();
+      appendMsg("Bot", "¡Lista para aprender! Puedes subir un documento cuando quieras.");
+    };
+    // --- FIN: Nueva función para inicializar componentes RAG ---
+
     const loadModel = async () => {
       engine = new MLCEngine();
       engine.setInitProgressCallback(console.log);
       appendMsg("Bot", "Inicializando modelo, por favor espera...");
       await engine.reload(model);
       appendMsg("Bot", "Modelo cargado. Puedes empezar a escribir.");
+      isEngineReady = true; // <-- NUEVA LÍNEA: El motor está listo
+      // Inicializamos los componentes RAG después de que el modelo principal cargue
+      await initializeRAG();
     };
 
     const saveChatHistory = () => {
@@ -116,6 +147,78 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
 
     
     //Eventos
+
+    // --- INICIO: Nuevos eventos para la carga de archivos ---
+    uploadBtn.addEventListener('click', () => {
+      fileInput.click(); // Abre el selector de archivos
+    });
+
+    fileInput.addEventListener('change', (event) => {
+      handleFileSelect(event);
+    });
+
+    const handleFileSelect = async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      if (!embeddingPipeline || !vectorStore) {
+        appendMsg("Bot", "Espera un momento, todavía estoy preparando mis herramientas de estudio.");
+        return;
+      }
+
+      appendMsg("Bot", `Estudiando el documento: ${file.name}...`);
+      setImagen("pensando");
+
+      try {
+        let text = "";
+        if (file.type === "application/pdf") {
+          const pdf = await pdfjsLib.getDocument(URL.createObjectURL(file)).promise;
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            text += textContent.items.map(item => item.str).join(' ');
+          }
+        } else {
+          text = await file.text();
+        }
+
+        // 1. Dividir el texto en trozos (chunks)
+        const chunks = text.match(/[^.!?]+[.!?]+(\s|$)|\S+/g) || [];
+        appendMsg("Bot", `He dividido el documento en ${chunks.length} partes para analizarlo mejor.`);
+
+        // 2. Generar embeddings y almacenar en la base de datos vectorial
+        const embeddings = [];
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          // Ignoramos trozos muy pequeños que no aportan significado
+          if (chunk.trim().length < 10) continue;
+
+          const embedding = await embeddingPipeline(chunk, { pooling: 'mean', normalize: true });
+          embeddings.push({
+            id: `chunk-${i}`,
+            title: `Parte ${i+1}`,
+            text: chunk,
+            embedding: embedding.data,
+          });
+        }
+        
+        vectorStore.add(embeddings);
+        appendMsg("Bot", `¡Listo! He terminado de estudiar el documento. Ahora puedes hacerme preguntas sobre su contenido.`);
+        setImagen("ale");
+
+      } catch (error) {
+        console.error("Error procesando el archivo:", error);
+        appendMsg("Bot", "¡Uy! Tuve un problema al intentar leer ese archivo. ¿Podrías intentarlo de nuevo?");
+        setImagen("dud");
+      }
+    };
+    // --- FIN: Nuevos eventos para la carga de archivos ---
+
+    // --- INICIO: Evento para abrir y cerrar el chat ---
+    openChatBtn.addEventListener('click', () => {
+      chatContainer.classList.toggle('hidden');
+    });
+    // --- FIN: Evento para abrir y cerrar el chat ---
 
     micBtn.addEventListener('click', () => {
       micBtn.style.display = "none";
@@ -155,6 +258,25 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
       chatBox.scrollTop = chatBox.scrollHeight;
     };
 
+    // --- INICIO: Nueva función para el efecto de escritura ---
+    const typeWriterEffect = (element, text, callback) => {
+      let i = 0;
+      const speed = 50; // Velocidad de escritura en milisegundos
+
+      function type() {
+        if (i < text.length) {
+          element.innerHTML = text.substring(0, i + 1) + '<span class="animate-ping">|</span>';
+          i++;
+          setTimeout(type, speed);
+        } else {
+          element.innerHTML = text; // Limpia el cursor al final
+          if (callback) callback();
+        }
+      }
+      type();
+    };
+    // --- FIN: Nueva función para el efecto de escritura ---
+
     const obtenerEmocion = (mensaje) =>{
       let parte = mensaje.slice(1,4);
       return parte;
@@ -181,9 +303,97 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
         default:
           imagen = "img/normal.png";
       }
-      imagenCharacter.src = imagen;
-      imagenCharacter.className = "character";
+      imagenCharacter.src = imagen; // Ya no se necesita cambiar la clase
     }
+
+    const handleUserMessage = async (userText) => {
+      if (!userText) return;
+
+      // <-- NUEVAS LÍNEAS: Comprobamos si el motor de IA está listo
+      if (!isEngineReady) {
+          appendMsg("Bot", "<cal>¡Un momento! Todavía estoy cargando mi cerebro. Por favor, espera a que diga 'Modelo cargado'.");
+          setImagen("dud");
+          return;
+      }
+
+      setImagen("pensando");
+      appendMsg("Tú", userText);
+      chatHistory.push({ role: "user", content: userText });
+      saveChatHistory();
+      appendMsg("Bot", "Pensando...");
+    
+      // --- INICIO: Lógica RAG (Fase 2) ---
+      let messagesForLLM = chatHistory; // Por defecto, usamos el historial de chat normal.
+
+      // 1. Comprobar si hay algo en nuestra memoria (vector store).
+      if (vectorStore && vectorStore.count() > 0) {
+        appendMsg("Bot", "Buscando en mis apuntes...");
+
+        // 2. Convertir la pregunta del usuario en un vector (embedding).
+        const queryEmbedding = await embeddingPipeline(userText, { pooling: 'mean', normalize: true });
+
+        // 3. Buscar los trozos de texto más relevantes en la memoria.
+        const K = 3; // El número de resultados más relevantes que queremos obtener.
+        const searchResults = await vectorStore.search(queryEmbedding.data, K);
+
+        // 4. Construir el "Contexto" con los resultados encontrados.
+        const context = searchResults.map(result => result.text).join("\n\n---\n\n");
+
+        // 5. Crear un nuevo prompt "aumentado" para el LLM.
+        // Esto obliga al modelo a basar su respuesta en la información que le proporcionamos.
+        const augmentedPrompt = `
+Contexto Relevante del Documento Estudiado:
+"""
+${context}
+"""
+
+Basándote ÚNICAMENTE en el "Contexto Relevante" anterior, actúa como la Profesora Ana y responde la siguiente pregunta del estudiante: "${userText}"
+Si la respuesta no se encuentra en el contexto, di amablemente que no encontraste esa información específica en el documento.`;
+
+        // Usamos un historial limpio para esta consulta, para no confundir al modelo.
+        messagesForLLM = [
+          systemPrompt,
+          { role: "user", content: augmentedPrompt }
+        ];
+      }
+      // --- FIN: Lógica RAG (Fase 2) ---
+
+      try {
+        const stream = await engine.chat.completions.create({
+          messages: messagesForLLM, // Usamos el historial normal o el prompt aumentado.
+          model: model,
+          stream: true,
+        });
+    
+        let botMsg = "";
+        for await (const response of stream) {
+          for (const choice of response.choices) {
+            botMsg += choice.delta.content || "";
+          }
+        }
+
+        let emocion = obtenerEmocion(botMsg);
+        console.log(emocion);
+    
+        chatHistory.push({ role: "assistant", content: botMsg });
+
+        // Limpiamos el mensaje de "Pensando..."
+        chatBox.lastChild.remove();
+
+        // Creamos el nuevo contenedor de mensaje para el bot
+        const cleanBotMsg = botMsg.slice(5);
+        appendMsg("Bot", ""); // Añade un mensaje vacío que se llenará con el efecto
+        const botMessageElement = chatBox.lastChild.querySelector('span:last-child');
+
+        // Inicia la reproducción de voz y el efecto de escritura simultáneamente
+        reproducirVoz(botMsg);
+        setImagen(emocion);
+        typeWriterEffect(botMessageElement, cleanBotMsg);
+      } catch (e) {
+        chatBox.lastChild.textContent = "Bot: (Error al responder)";
+        console.error(e);
+      }
+    };
 
     const sendMessage = async () => {
       setImagen("pensando");
@@ -192,76 +402,12 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
       appendMsg("Tú", userText);
       input.value = "";
       chatHistory.push({ role: "user", content: userText });
-      saveChatHistory();
-      appendMsg("Bot", "Pensando...");
-    
-      try {
-        const stream = await engine.chat.completions.create({
-          messages: chatHistory,
-          model: model,
-          stream: true,
-        });
-    
-        let botMsg = "";
-        for await (const response of stream) {
-          for (const choice of response.choices) {
-            botMsg += choice.delta.content || "";
-          }
-        }
-
-        let emocion = obtenerEmocion(botMsg);
-        console.log(emocion);
-    
-        chatHistory.push({ role: "assistant", content: botMsg });
-
-        await reproducirVoz(botMsg);
-        setImagen(emocion);
-        const cleanBotMsg = botMsg.slice(5);
-        chatBox.lastChild.innerHTML = `<span style="color: purple;">Bot:</span> ${cleanBotMsg}`;
-    
-      } catch (e) {
-        chatBox.lastChild.textContent = "Bot: (Error al responder)";
-        console.error(e);
-      }
+      handleUserMessage(userText);
     };
 
     const sendRecognizedMessage = async () => {
-      setImagen("pensando");
       const userText = recognizedText.trim();
-      if (!userText) return; 
-    
-      appendMsg("Tú", userText);
-      chatHistory.push({ role: "user", content: userText });
-      saveChatHistory();
-      appendMsg("Bot", "Pensando...");
-    
-      try {
-        const stream = await engine.chat.completions.create({
-          messages: chatHistory,
-          model: model,
-          stream: true,
-        });
-    
-        let botMsg = "";
-        for await (const response of stream) {
-          for (const choice of response.choices) {
-            botMsg += choice.delta.content || "";
-          }
-        }
-        
-        let emocion = obtenerEmocion(botMsg);
-        console.log(emocion);
-    
-        chatHistory.push({ role: "assistant", content: botMsg });
-    
-        await reproducirVoz(botMsg);
-        setImagen(emocion);
-        const cleanBotMsg = botMsg.slice(5);
-        chatBox.lastChild.innerHTML = `<span style="color: purple;">Bot:</span> ${cleanBotMsg}`;
-      } catch (e) {
-        chatBox.lastChild.textContent = "Bot: (Error al responder)";
-        console.error(e);
-      }
+      handleUserMessage(userText);
     };
 
     sendBtn.onclick = sendMessage;
