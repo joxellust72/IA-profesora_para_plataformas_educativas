@@ -1,12 +1,34 @@
 import { MLCEngine } from "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.78/lib/index.min.js";
 import { reproducirVoz } from "./services/voiceBoxAPI.js";
 
-// --- INICIO: Nuevos elementos para RAG ---
-const { pipeline } = window.Transformers;
-const { Voy } = window;
-const pdfjsLib = window['pdfjs-dist/build/pdf'];
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//mozilla.github.io/pdf.js/build/pdf.worker.mjs`;
-// --- FIN: Nuevos elementos para RAG ---
+document.addEventListener("DOMContentLoaded", async () => {
+     // --- INICIO: Nuevos elementos para RAG ---
+     const { pipeline } = window.Transformers;
+     const { Voy } = window;
+    // Cargamos pdfjs de forma segura en caso de que no esté disponible aún
+    const loadPdfJs = () => {
+      return new Promise((resolve, reject) => {
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+          return resolve(window.pdfjsLib);
+        }
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.js';
+        s.onload = () => {
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+            resolve(window.pdfjsLib);
+          } else {
+            reject(new Error('pdfjsLib no quedó disponible después de cargar el script.'));
+          }
+        };
+        s.onerror = (e) => reject(e);
+        document.head.appendChild(s);
+      });
+    };
+    // Esperamos a que pdfjs esté listo antes de continuar
+    try { await loadPdfJs(); } catch (e) { console.warn('No se pudo cargar pdfjs:', e); }
+     // --- FIN: Nuevos elementos para RAG ---
 
     const chatBox = document.getElementById("chat");
     const input = document.getElementById("user-input");
@@ -215,11 +237,21 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
     // --- FIN: Nuevos eventos para la carga de archivos ---
 
     // --- INICIO: Evento para abrir y cerrar el chat ---
+    // Abrir el chat con el botón flotante. El botón flotante se oculta cuando el chat está visible.
     openChatBtn.addEventListener('click', () => {
-      chatContainer.classList.toggle('hidden');
+      const isHidden = chatContainer.classList.toggle('hidden');
+      openChatBtn.style.display = isHidden ? 'block' : 'none';
     });
+    // El cierre del chat se realiza con el botón interno (ver index.html). Cuando se cierre, mostramos el botón flotante.
+    const closeChatBtn = document.getElementById('close-chat-btn');
+    if (closeChatBtn) {
+      closeChatBtn.addEventListener('click', () => {
+        chatContainer.classList.add('hidden');
+        openChatBtn.style.display = 'block';
+      });
+    }
     // --- FIN: Evento para abrir y cerrar el chat ---
-
+ 
     micBtn.addEventListener('click', () => {
       micBtn.style.display = "none";
       stopBtn.style.display = "block";
@@ -245,11 +277,11 @@ No expliques la emoción. Solo añade la etiqueta y luego el contenido
       div.className = `msg ${role === "Bot" ? "bot" : "user"}`;
       
       const roleSpan = document.createElement("span");
-      roleSpan.textContent = `${role}: `;
-      roleSpan.style.color = role === "Bot" ? "purple" : "green"; 
+      roleSpan.textContent = `${role === "Bot" ? "Profe Ana" : "Tú"}: `;
+      roleSpan.className = "font-bold";
       
       const contentSpan = document.createElement("span");
-      contentSpan.textContent = content;
+      contentSpan.textContent = content;      
   
       div.appendChild(roleSpan);
       div.appendChild(contentSpan);
@@ -384,6 +416,11 @@ Si la respuesta no se encuentra en el contexto, di amablemente que no encontrast
         const cleanBotMsg = botMsg.slice(5);
         appendMsg("Bot", ""); // Añade un mensaje vacío que se llenará con el efecto
         const botMessageElement = chatBox.lastChild.querySelector('span:last-child');
+        
+        // Añadimos la clase para el efecto de tiza
+        if (chatBox.lastChild.classList.contains('bot')) {
+          botMessageElement.classList.add('chalk-font');
+        }
 
         // Inicia la reproducción de voz y el efecto de escritura simultáneamente
         reproducirVoz(botMsg);
@@ -419,3 +456,4 @@ Si la respuesta no se encuentra en el contexto, di amablemente que no encontrast
 
     loadModel();
     loadChatHistory();
+});
